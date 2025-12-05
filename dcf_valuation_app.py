@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime
 import time
 from functools import wraps
@@ -13,7 +12,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER
 
 st.set_page_config(page_title="NYZTrade DCF Pro", page_icon="📊", layout="wide")
 
@@ -82,8 +81,6 @@ st.markdown("""
     margin-bottom: 30px;
     box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     border: 1px solid rgba(255,255,255,0.05);
-    position: relative;
-    overflow: hidden;
 }
 .main-header h1 { color: #fff; font-size: 2.5rem; font-weight: 700; margin: 0; }
 .main-header .subtitle { color: rgba(255,255,255,0.7); font-size: 1.1rem; margin-top: 8px; }
@@ -160,7 +157,7 @@ header {visibility: hidden;}
 """, unsafe_allow_html=True)
 
 # ============================================
-# STOCK UNIVERSE - Investing.com Pro Style
+# STOCK UNIVERSE
 # ============================================
 POPULAR_STOCKS = {
     "🔵 Large Cap - Nifty 50": {
@@ -207,7 +204,7 @@ POPULAR_STOCKS = {
     }
 }
 
-# Industry parameters for WACC calculation (Investing.com Pro style)
+# Industry parameters
 INDUSTRY_PARAMS = {
     'Technology': {'beta': 1.15, 'debt_equity': 0.1, 'tax_rate': 0.25, 'terminal_growth': 0.04, 'ev_ebitda': 18},
     'Financial Services': {'beta': 1.0, 'debt_equity': 0.8, 'tax_rate': 0.25, 'terminal_growth': 0.035, 'ev_ebitda': 12},
@@ -245,7 +242,7 @@ def retry_with_backoff(retries=5, backoff_in_seconds=3):
 @st.cache_data(ttl=10800)
 @retry_with_backoff(retries=5, backoff_in_seconds=3)
 def fetch_stock_data(ticker):
-    """Fetch comprehensive stock data"""
+    """Fetch stock data"""
     try:
         time.sleep(1.5)
         stock = yf.Ticker(ticker)
@@ -271,7 +268,7 @@ def fetch_stock_data(ticker):
         return None, None, None, str(e)[:100]
 
 def calculate_fcf_from_financials(info, income_stmt, cash_flow):
-    """Calculate FCF - Returns in CHRONOLOGICAL order (oldest to newest)"""
+    """Calculate FCF - Chronological order"""
     fcf_data = {}
     
     try:
@@ -303,7 +300,7 @@ def calculate_fcf_from_financials(info, income_stmt, cash_flow):
                         ocf = float(ocf_row[col]) if pd.notna(ocf_row[col]) else 0
                         capex = float(capex_row[col]) if pd.notna(capex_row[col]) else 0
                         fcf_data[str(year)] = ocf + capex if capex < 0 else ocf - abs(capex)
-    except Exception as e:
+    except:
         pass
     
     if not fcf_data:
@@ -312,21 +309,18 @@ def calculate_fcf_from_financials(info, income_stmt, cash_flow):
         if operating_cf > 0:
             fcf_data['TTM'] = operating_cf - capex
     
-    # Sort chronologically (oldest first)
     return dict(sorted(fcf_data.items(), key=lambda x: x[0]))
 
 def calculate_wacc(info, risk_free_rate=0.07, market_premium=0.06):
-    """WACC using CAPM (Investing.com Pro methodology)"""
+    """WACC using CAPM"""
     sector = info.get('sector', 'Default')
     params = INDUSTRY_PARAMS.get(sector, INDUSTRY_PARAMS['Default'])
     
     beta = info.get('beta', params['beta']) or params['beta']
     beta = max(0.5, min(2.0, beta))
     
-    # Cost of Equity: Re = Rf + β × (Rm - Rf)
     cost_of_equity = risk_free_rate + beta * market_premium
     
-    # Cost of Debt
     total_debt = info.get('totalDebt', 0) or 0
     interest_expense = info.get('interestExpense', 0) or 0
     
@@ -348,7 +342,6 @@ def calculate_wacc(info, risk_free_rate=0.07, market_premium=0.06):
         equity_weight = 1 / (1 + debt_equity)
         debt_weight = debt_equity / (1 + debt_equity)
     
-    # WACC = (E/V × Re) + (D/V × Rd × (1-T))
     wacc = (equity_weight * cost_of_equity) + (debt_weight * cost_of_debt * (1 - tax_rate))
     
     return {
@@ -364,7 +357,7 @@ def calculate_wacc(info, risk_free_rate=0.07, market_premium=0.06):
     }
 
 def project_fcf(base_fcf, growth_rates, years=5):
-    """Project FCF for N years"""
+    """Project FCF"""
     projected = []
     current_fcf = base_fcf
     
@@ -376,17 +369,17 @@ def project_fcf(base_fcf, growth_rates, years=5):
     return projected
 
 def calculate_terminal_value_gordon(final_fcf, wacc, terminal_growth):
-    """Gordon Growth: TV = FCF × (1+g) / (WACC - g)"""
+    """Gordon Growth Model"""
     if wacc <= terminal_growth:
         terminal_growth = wacc - 0.02
     return final_fcf * (1 + terminal_growth) / (wacc - terminal_growth)
 
 def calculate_terminal_value_exit_multiple(final_ebitda, exit_multiple):
-    """Exit Multiple: TV = EBITDA × Multiple"""
+    """Exit Multiple Method"""
     return final_ebitda * exit_multiple
 
 def calculate_dcf_value(projected_fcf, terminal_value, wacc, net_debt, shares_outstanding):
-    """Calculate DCF fair value per share"""
+    """Calculate DCF fair value"""
     pv_fcfs = 0
     for item in projected_fcf:
         discount_factor = (1 + wacc) ** item['year']
@@ -410,7 +403,7 @@ def calculate_dcf_value(projected_fcf, terminal_value, wacc, net_debt, shares_ou
     }
 
 def run_sensitivity_analysis(base_fcf, growth_rates, wacc_base, terminal_growth_base, net_debt, shares, years=5):
-    """Sensitivity matrix for WACC vs Terminal Growth"""
+    """Sensitivity matrix"""
     wacc_range = [wacc_base - 0.02, wacc_base - 0.01, wacc_base, wacc_base + 0.01, wacc_base + 0.02]
     growth_range = [terminal_growth_base - 0.01, terminal_growth_base - 0.005, 
                     terminal_growth_base, terminal_growth_base + 0.005, terminal_growth_base + 0.01]
@@ -431,13 +424,12 @@ def run_sensitivity_analysis(base_fcf, growth_rates, wacc_base, terminal_growth_
     return {'matrix': matrix, 'wacc_range': wacc_range, 'growth_range': growth_range}
 
 # ============================================
-# CHART FUNCTIONS (FIXED)
+# CHART FUNCTIONS - UNIVERSAL PLOTLY SYNTAX
 # ============================================
 def create_fcf_projection_chart(historical_fcf, projected_fcf):
-    """FCF Bar Chart - Historical (chronological) + Projected"""
+    """FCF Bar Chart - Compatible with all Plotly versions"""
     fig = go.Figure()
     
-    # Historical FCF (already sorted chronologically)
     if historical_fcf:
         years = list(historical_fcf.keys())
         values = [v / 10000000 for v in historical_fcf.values()]
@@ -449,10 +441,10 @@ def create_fcf_projection_chart(historical_fcf, projected_fcf):
             marker_color='#667eea',
             text=[f'₹{v:,.1f} Cr' for v in values],
             textposition='outside',
-            textfont=dict(size=11, color='white')
+            textfont_size=11,
+            textfont_color='white'
         ))
     
-    # Projected FCF
     if projected_fcf:
         proj_years = [f'Year {p["year"]}' for p in projected_fcf]
         proj_values = [p['fcf'] / 10000000 for p in projected_fcf]
@@ -464,38 +456,45 @@ def create_fcf_projection_chart(historical_fcf, projected_fcf):
             marker_color='#00b894',
             text=[f'₹{v:,.1f} Cr' for v in proj_values],
             textposition='outside',
-            textfont=dict(size=11, color='white')
+            textfont_size=11,
+            textfont_color='white'
         ))
     
+    # Simple layout without nested dicts - using underscore notation
     fig.update_layout(
-        title='Free Cash Flow: Historical & Projected',
-        title_font=dict(size=18, color='white'),
+        title_text='Free Cash Flow: Historical & Projected',
         title_x=0.5,
-        xaxis=dict(
-            title='Period',
-            titlefont=dict(color='rgba(255,255,255,0.7)'),
-            tickfont=dict(color='white'),
-            showgrid=False
-        ),
-        yaxis=dict(
-            title='FCF (₹ Crores)',
-            titlefont=dict(color='rgba(255,255,255,0.7)'),
-            tickfont=dict(color='white'),
-            gridcolor='rgba(255,255,255,0.1)'
-        ),
+        title_font_size=18,
+        title_font_color='white',
+        xaxis_title='Period',
+        xaxis_title_font_color='rgba(255,255,255,0.7)',
+        xaxis_tickfont_color='white',
+        xaxis_showgrid=False,
+        yaxis_title='FCF (₹ Crores)',
+        yaxis_title_font_color='rgba(255,255,255,0.7)',
+        yaxis_tickfont_color='white',
+        yaxis_gridcolor='rgba(255,255,255,0.1)',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=450,
         showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5, font=dict(color='white')),
-        margin=dict(t=80, b=50, l=60, r=40),
+        legend_orientation='h',
+        legend_yanchor='bottom',
+        legend_y=1.02,
+        legend_xanchor='center',
+        legend_x=0.5,
+        legend_font_color='white',
+        margin_t=80,
+        margin_b=50,
+        margin_l=60,
+        margin_r=40,
         bargap=0.3
     )
     
     return fig
 
 def create_valuation_waterfall(pv_fcfs, pv_terminal, net_debt, equity_value):
-    """Valuation Waterfall Chart"""
+    """Waterfall Chart"""
     fig = go.Figure(go.Waterfall(
         orientation="v",
         measure=["relative", "relative", "relative", "total"],
@@ -504,35 +503,40 @@ def create_valuation_waterfall(pv_fcfs, pv_terminal, net_debt, equity_value):
         text=[f'₹{pv_fcfs/10000000:,.0f} Cr', f'₹{pv_terminal/10000000:,.0f} Cr', 
               f'-₹{net_debt/10000000:,.0f} Cr', f'₹{equity_value/10000000:,.0f} Cr'],
         textposition="outside",
-        textfont=dict(color='white', size=12),
-        connector=dict(line=dict(color='rgba(255,255,255,0.3)', width=2)),
-        increasing=dict(marker=dict(color='#00b894')),
-        decreasing=dict(marker=dict(color='#e17055')),
-        totals=dict(marker=dict(color='#667eea'))
+        textfont_color='white',
+        textfont_size=12,
+        connector_line_color='rgba(255,255,255,0.3)',
+        connector_line_width=2,
+        increasing_marker_color='#00b894',
+        decreasing_marker_color='#e17055',
+        totals_marker_color='#667eea'
     ))
     
     fig.update_layout(
-        title='DCF Valuation Waterfall',
-        title_font=dict(size=18, color='white'),
+        title_text='DCF Valuation Waterfall',
         title_x=0.5,
-        xaxis=dict(tickfont=dict(color='white', size=11)),
-        yaxis=dict(
-            title='Value (₹ Crores)',
-            titlefont=dict(color='rgba(255,255,255,0.7)'),
-            tickfont=dict(color='white'),
-            gridcolor='rgba(255,255,255,0.1)'
-        ),
+        title_font_size=18,
+        title_font_color='white',
+        xaxis_tickfont_color='white',
+        xaxis_tickfont_size=11,
+        yaxis_title='Value (₹ Crores)',
+        yaxis_title_font_color='rgba(255,255,255,0.7)',
+        yaxis_tickfont_color='white',
+        yaxis_gridcolor='rgba(255,255,255,0.1)',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=450,
         showlegend=False,
-        margin=dict(t=80, b=50, l=60, r=40)
+        margin_t=80,
+        margin_b=50,
+        margin_l=60,
+        margin_r=40
     )
     
     return fig
 
 def create_sensitivity_heatmap(sensitivity_data):
-    """Sensitivity Analysis Heatmap"""
+    """Sensitivity Heatmap"""
     matrix = sensitivity_data['matrix']
     wacc_labels = [f'{w*100:.1f}%' for w in sensitivity_data['wacc_range']]
     growth_labels = [f'{g*100:.2f}%' for g in sensitivity_data['growth_range']]
@@ -544,91 +548,136 @@ def create_sensitivity_heatmap(sensitivity_data):
         colorscale=[[0, '#d63031'], [0.25, '#e17055'], [0.5, '#fdcb6e'], [0.75, '#00cec9'], [1, '#00b894']],
         text=[[f'₹{val:,.0f}' for val in row] for row in matrix],
         texttemplate='%{text}',
-        textfont=dict(size=12, color='white'),
+        textfont_size=12,
+        textfont_color='white',
         hoverongaps=False,
-        colorbar=dict(title='Fair Value', titlefont=dict(color='white'), tickfont=dict(color='white'))
+        colorbar_title_text='Fair Value',
+        colorbar_title_font_color='white',
+        colorbar_tickfont_color='white'
     ))
     
     fig.update_layout(
-        title='Sensitivity Analysis: Fair Value (WACC vs Terminal Growth)',
-        title_font=dict(size=18, color='white'),
+        title_text='Sensitivity Analysis: Fair Value (WACC vs Terminal Growth)',
         title_x=0.5,
-        xaxis=dict(title='Terminal Growth Rate', titlefont=dict(color='rgba(255,255,255,0.7)'), tickfont=dict(color='white')),
-        yaxis=dict(title='WACC', titlefont=dict(color='rgba(255,255,255,0.7)'), tickfont=dict(color='white')),
+        title_font_size=18,
+        title_font_color='white',
+        xaxis_title='Terminal Growth Rate',
+        xaxis_title_font_color='rgba(255,255,255,0.7)',
+        xaxis_tickfont_color='white',
+        yaxis_title='WACC',
+        yaxis_title_font_color='rgba(255,255,255,0.7)',
+        yaxis_tickfont_color='white',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=450,
-        margin=dict(t=80, b=60, l=80, r=60)
+        margin_t=80,
+        margin_b=60,
+        margin_l=80,
+        margin_r=60
     )
     
     return fig
 
 def create_value_gauge(current_price, fair_value, upside):
-    """Fair Value Gauge Chart"""
+    """Fair Value Gauge"""
     gauge_color = '#00b894' if upside > 0 else '#e17055'
     max_val = max(fair_value * 1.5, current_price * 1.5, 100)
     
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=fair_value,
-        number=dict(prefix="₹", font=dict(size=40, color='white'), valueformat=",.2f"),
-        delta=dict(reference=current_price, relative=True, valueformat='.1%',
-                   increasing=dict(color='#00b894'), decreasing=dict(color='#e17055'), font=dict(size=18)),
-        title=dict(text="DCF Fair Value", font=dict(size=18, color='white')),
-        gauge=dict(
-            axis=dict(range=[0, max_val], tickfont=dict(color='rgba(255,255,255,0.7)')),
-            bar=dict(color=gauge_color),
-            bgcolor='rgba(255,255,255,0.05)',
-            steps=[
-                dict(range=[0, current_price * 0.8], color='rgba(225, 112, 85, 0.3)'),
-                dict(range=[current_price * 0.8, current_price], color='rgba(253, 203, 110, 0.3)'),
-                dict(range=[current_price, current_price * 1.2], color='rgba(0, 206, 201, 0.3)'),
-                dict(range=[current_price * 1.2, max_val], color='rgba(0, 184, 148, 0.3)')
-            ],
-            threshold=dict(line=dict(color='white', width=4), thickness=0.8, value=current_price)
-        )
+        number_prefix="₹",
+        number_font_size=40,
+        number_font_color='white',
+        number_valueformat=",.2f",
+        delta_reference=current_price,
+        delta_relative=True,
+        delta_valueformat='.1%',
+        delta_increasing_color='#00b894',
+        delta_decreasing_color='#e17055',
+        delta_font_size=18,
+        title_text="DCF Fair Value",
+        title_font_size=18,
+        title_font_color='white',
+        gauge_axis_range=[0, max_val],
+        gauge_axis_tickfont_color='rgba(255,255,255,0.7)',
+        gauge_bar_color=gauge_color,
+        gauge_bgcolor='rgba(255,255,255,0.05)',
+        gauge_steps=[
+            {'range': [0, current_price * 0.8], 'color': 'rgba(225, 112, 85, 0.3)'},
+            {'range': [current_price * 0.8, current_price], 'color': 'rgba(253, 203, 110, 0.3)'},
+            {'range': [current_price, current_price * 1.2], 'color': 'rgba(0, 206, 201, 0.3)'},
+            {'range': [current_price * 1.2, max_val], 'color': 'rgba(0, 184, 148, 0.3)'}
+        ],
+        gauge_threshold_line_color='white',
+        gauge_threshold_line_width=4,
+        gauge_threshold_thickness=0.8,
+        gauge_threshold_value=current_price
     ))
     
     fig.update_layout(
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=350,
-        margin=dict(t=60, b=60, l=40, r=40)
+        margin_t=60,
+        margin_b=60,
+        margin_l=40,
+        margin_r=40
     )
     
-    fig.add_annotation(x=0.5, y=-0.15, xref='paper', yref='paper',
-                       text=f'Current Price: ₹{current_price:,.2f}', showarrow=False,
-                       font=dict(size=14, color='rgba(255,255,255,0.8)'))
+    fig.add_annotation(
+        x=0.5, y=-0.15, 
+        xref='paper', yref='paper',
+        text=f'Current Price: ₹{current_price:,.2f}', 
+        showarrow=False,
+        font_size=14,
+        font_color='rgba(255,255,255,0.8)'
+    )
     
     return fig
 
 def create_value_composition_donut(pv_fcfs, pv_terminal):
-    """Value Composition Donut Chart"""
+    """Value Composition Donut"""
     total_ev = pv_fcfs + pv_terminal
     
     fig = go.Figure(data=[go.Pie(
         labels=['PV of FCFs', 'PV of Terminal Value'],
         values=[pv_fcfs, pv_terminal],
         hole=0.65,
-        marker=dict(colors=['#667eea', '#00b894']),
+        marker_colors=['#667eea', '#00b894'],
         textinfo='percent',
-        textfont=dict(size=14, color='white')
+        textfont_size=14,
+        textfont_color='white'
     )])
     
     fig.update_layout(
-        title='Enterprise Value Composition',
-        title_font=dict(size=18, color='white'),
+        title_text='Enterprise Value Composition',
         title_x=0.5,
+        title_font_size=18,
+        title_font_color='white',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=350,
         showlegend=True,
-        legend=dict(orientation='h', y=-0.1, x=0.5, xanchor='center', font=dict(color='white', size=11)),
-        margin=dict(t=80, b=80, l=40, r=40)
+        legend_orientation='h',
+        legend_y=-0.1,
+        legend_x=0.5,
+        legend_xanchor='center',
+        legend_font_color='white',
+        legend_font_size=11,
+        margin_t=80,
+        margin_b=80,
+        margin_l=40,
+        margin_r=40
     )
     
-    fig.add_annotation(text=f'₹{total_ev/10000000:,.0f} Cr', x=0.5, y=0.5,
-                       font=dict(size=16, color='white'), showarrow=False)
+    fig.add_annotation(
+        text=f'₹{total_ev/10000000:,.0f} Cr', 
+        x=0.5, y=0.5,
+        font_size=16,
+        font_color='white',
+        showarrow=False
+    )
     
     return fig
 
@@ -773,7 +822,6 @@ custom = st.sidebar.text_input("Custom Ticker", placeholder="e.g., TATAMOTORS.NS
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ DCF Assumptions")
 
-# Growth Rates (Investing.com Pro style - 5 years)
 with st.sidebar.expander("📈 5-Year Growth Rates", expanded=True):
     st.caption("Annual FCF Growth (%)")
     g1 = st.slider("Year 1", -20, 50, 15, format="%d%%") / 100
@@ -783,14 +831,12 @@ with st.sidebar.expander("📈 5-Year Growth Rates", expanded=True):
     g5 = st.slider("Year 5", -20, 50, 6, format="%d%%") / 100
     growth_rates = [g1, g2, g3, g4, g5]
 
-# WACC
 with st.sidebar.expander("💵 WACC Parameters"):
     risk_free_rate = st.slider("Risk-Free Rate", 4.0, 10.0, 7.0, format="%.1f%%") / 100
     market_premium = st.slider("Equity Risk Premium", 3.0, 10.0, 6.0, format="%.1f%%") / 100
     use_custom_wacc = st.checkbox("Override WACC")
     manual_wacc = st.slider("Custom WACC", 8.0, 20.0, 12.0, format="%.1f%%") / 100 if use_custom_wacc else None
 
-# Terminal Value (Investing.com Pro: Gordon Growth OR Exit Multiple)
 with st.sidebar.expander("🔮 Terminal Value"):
     tv_method = st.radio("Method", ["Gordon Growth Model", "Exit Multiple (EV/EBITDA)"])
     if tv_method == "Gordon Growth Model":
@@ -800,7 +846,7 @@ with st.sidebar.expander("🔮 Terminal Value"):
         exit_multiple = st.slider("Exit EV/EBITDA Multiple", 5.0, 25.0, 10.0, format="%.1fx")
         terminal_growth = 0.03
 
-projection_years = 5  # Fixed 5-year projection like Investing.com Pro
+projection_years = 5
 
 st.sidebar.markdown("---")
 
@@ -827,7 +873,6 @@ if 'analyze' in st.session_state:
         st.error("❌ Failed to fetch data")
         st.stop()
     
-    # Extract data
     company = info.get('longName', t)
     sector = info.get('sector', 'Default')
     current_price = info.get('currentPrice', 0) or info.get('regularMarketPrice', 0)
@@ -838,10 +883,8 @@ if 'analyze' in st.session_state:
     net_debt = total_debt - total_cash
     ebitda = info.get('ebitda', 0) or 0
     
-    # Historical FCF (chronological)
     historical_fcf = calculate_fcf_from_financials(info, income_stmt, cash_flow)
     
-    # Base FCF (most recent)
     if historical_fcf:
         base_fcf = list(historical_fcf.values())[-1]
     else:
@@ -851,7 +894,6 @@ if 'analyze' in st.session_state:
         st.warning("⚠️ Negative FCF. Using EBITDA estimate.")
         base_fcf = ebitda * 0.5 if ebitda > 0 else market_cap * 0.05
     
-    # WACC
     if use_custom_wacc and manual_wacc:
         wacc = manual_wacc
         wacc_data = {'wacc': wacc, 'cost_of_equity': wacc, 'cost_of_debt': wacc*0.7, 
@@ -861,25 +903,21 @@ if 'analyze' in st.session_state:
         wacc_data = calculate_wacc(info, risk_free_rate, market_premium)
         wacc = wacc_data['wacc']
     
-    # Project FCF
     projected_fcf = project_fcf(base_fcf, growth_rates, projection_years)
     
-    # Terminal Value
     if tv_method == "Gordon Growth Model":
         tv = calculate_terminal_value_gordon(projected_fcf[-1]['fcf'], wacc, terminal_growth)
     else:
         final_ebitda = ebitda * np.prod([1 + g for g in growth_rates])
         tv = calculate_terminal_value_exit_multiple(final_ebitda, exit_multiple)
     
-    # DCF Value
     dcf_results = calculate_dcf_value(projected_fcf, tv, wacc, net_debt, shares)
     fair_value = dcf_results['fair_value']
     upside = ((fair_value - current_price) / current_price * 100) if current_price > 0 else 0
     
-    # Sensitivity
     sensitivity = run_sensitivity_analysis(base_fcf, growth_rates, wacc, terminal_growth, net_debt, shares)
     
-    # ==================== DISPLAY ====================
+    # Display
     st.markdown(f"## {company}")
     st.markdown(f"**{sector}** • `{t}` • Market Cap: ₹{market_cap/10000000:,.0f} Cr")
     
@@ -907,7 +945,6 @@ if 'analyze' in st.session_state:
         </div>
         ''', unsafe_allow_html=True)
     
-    # PDF Download
     assumptions_dict = {'current_price': current_price, 'upside': upside, 'terminal_growth': terminal_growth,
                         'projection_years': projection_years, 'net_debt': net_debt}
     pdf = create_dcf_pdf_report(company, t, sector, dcf_results, wacc_data, assumptions_dict)
@@ -917,7 +954,6 @@ if 'analyze' in st.session_state:
     
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     
-    # Metrics
     st.markdown("### 📊 Key Metrics")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Price", f"₹{current_price:,.2f}")
@@ -927,7 +963,6 @@ if 'analyze' in st.session_state:
     m5.metric("Base FCF", f"₹{base_fcf/10000000:,.1f} Cr")
     m6.metric("WACC", f"{wacc*100:.2f}%")
     
-    # Recommendation
     if upside > 40:
         rec_cls, rec_txt = "rec-strong-buy", "🚀 STRONG BUY"
     elif upside > 20:
@@ -948,7 +983,6 @@ if 'analyze' in st.session_state:
     
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     
-    # Charts
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 FCF Projection", "💧 Waterfall", "🎯 Sensitivity", "🍩 Composition", "📋 Tables"])
     
     with tab1:
@@ -995,7 +1029,6 @@ if 'analyze' in st.session_state:
     
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     
-    # WACC Details
     st.markdown("### 📐 WACC Breakdown")
     w1, w2, w3, w4 = st.columns(4)
     
@@ -1016,25 +1049,25 @@ else:
     st.markdown('''
     <div class="info-card">
         <h4>👈 Getting Started</h4>
-        <p>Select a stock and click <b>RUN DCF ANALYSIS</b> to calculate intrinsic value using the Investing.com Pro methodology.</p>
+        <p>Select a stock and click <b>RUN DCF ANALYSIS</b> to calculate intrinsic value.</p>
     </div>
     ''', unsafe_allow_html=True)
     
     st.markdown("""
-    ### 📐 Investing.com Pro DCF Methodology
+    ### 📐 DCF Methodology (Investing.com Pro Style)
     
-    This model follows the **5-Year Growth + Exit Multiple** approach:
+    **5-Year Growth + Terminal Value Model:**
     
-    1. **Forecast FCF** for 5 years using custom growth rates
-    2. **Calculate WACC** using CAPM (Cost of Equity) + Cost of Debt
-    3. **Terminal Value** via Gordon Growth or Exit Multiple (EV/EBITDA)
+    1. **Forecast FCF** for 5 years with custom growth rates
+    2. **Calculate WACC** using CAPM model
+    3. **Terminal Value** via Gordon Growth or Exit Multiple
     4. **Discount** all cash flows to present value
-    5. **Subtract Net Debt** to get Equity Value
+    5. **Equity Value** = Enterprise Value - Net Debt
     
-    **Formulas:**
+    **Key Formulas:**
     ```
     WACC = (E/V × Re) + (D/V × Rd × (1-T))
-    Cost of Equity (CAPM) = Rf + β × (Rm - Rf)
+    Cost of Equity = Rf + β × (Rm - Rf)
     Terminal Value (Gordon) = FCF₅ × (1+g) / (WACC - g)
     Terminal Value (Exit) = EBITDA₅ × Exit Multiple
     ```
@@ -1042,7 +1075,7 @@ else:
 
 st.markdown('''
 <div class="footer">
-    <p><b>NYZTrade DCF Pro</b> | Investing.com Pro Methodology</p>
+    <p><b>NYZTrade DCF Pro</b> | Professional Valuation Tool</p>
     <p>⚠️ Educational purposes only. Not financial advice.</p>
 </div>
 ''', unsafe_allow_html=True)
